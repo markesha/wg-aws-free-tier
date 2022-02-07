@@ -1,0 +1,60 @@
+#!/bin/bash
+apt update -y
+apt install wireguard awscli -y
+
+umask 077
+mkdir /etc/wireguard/client/
+
+PUBLIC_IP=`curl http://169.254.169.254/latest/meta-data/public-ipv4`
+NETWORK_INTERFACE=`ip -o -4 route show to default | awk '{print $5}'`
+
+cd /etc/wireguard/
+wg genkey | tee privatekey | wg pubkey > publickey
+SERVER_PRIVATE_KEY=`cat privatekey`
+SERVER_PUBLIC_KEY=`cat publickey`
+
+cd /etc/wireguard/client/
+wg genkey | tee privatekey | wg pubkey > publickey
+CLIENT_PRIVATE_KEY=`cat privatekey`
+CLIENT_PUBLIC_KEY=`cat publickey`
+
+cat << EOF > /etc/wireguard/wg0.conf
+[Interface]
+Address = 10.0.0.1/24
+ListenPort = 51820
+PrivateKey = $SERVER_PRIVATE_KEY
+PostUp = ufw route allow in on wg0 out on $NETWORK_INTERFACE
+PostUp = iptables -A FORWARD -i %i -j ACCEPT; iptables -t nat -A POSTROUTING -o $NETWORK_INTERFACE -j MASQUERADE
+PostDown = ufw route delete allow in on wg0 out on $NETWORK_INTERFACE
+PostDown = iptables -D FORWARD -i %i -j ACCEPT; iptables -t nat -D POSTROUTING -o $NETWORK_INTERFACE -j MASQUERADE
+SaveConfig = true
+[Peer]
+PublicKey = $CLIENT_PUBLIC_KEY
+AllowedIPs = 10.0.0.2/32
+EOF
+
+cat << EOF > /etc/wireguard/client/config.conf
+[Interface]
+PrivateKey = $CLIENT_PRIVATE_KEY
+Address = 10.0.0.2/32
+DNS = 8.8.8.8
+[Peer]
+PublicKey = $SERVER_PUBLIC_KEY
+AllowedIPs = 0.0.0.0/0
+Endpoint = $PUBLIC_IP:51820
+PersistentKeepalive = 15
+EOF
+
+chmod 600 /etc/wireguard/{privatekey,wg0.conf}
+sed -i 's/#net.ipv4.ip_forward=1/net.ipv4.ip_forward=1/' /etc/sysctl.conf
+sysctl -p
+
+ufw allow 51820/udp
+ufw allow 53/udp
+ufw allow 53/tcp
+ufw allow 80/tcp
+ufw allow 443/tcp
+systemctl enable wg-quick@wg0
+systemctl start wg-quick@wg0
+
+aws s3 cp /etc/wireguard/client/config.conf s3://${bucket}/config.yaml
