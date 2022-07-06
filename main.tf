@@ -43,10 +43,10 @@ resource "aws_launch_configuration" "this" {
 
 resource "aws_autoscaling_group" "this" {
   max_size                  = 1
-  min_size                  = var.state == "on" ? 1 : 0
+  min_size                  = 0
   health_check_grace_period = 300
   health_check_type         = "ELB"
-  desired_capacity          = 0
+  desired_capacity          = var.state == "on" ? 1 : 0
   launch_configuration      = aws_launch_configuration.this.name
   vpc_zone_identifier       = [for subnet in aws_subnet.public : subnet.id]
 
